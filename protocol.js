@@ -21,7 +21,7 @@
     return (c^0xffffffff)>>>0;
   }
   function command(op,tx,total,crc,formatId) {
-    if(![1,2,3,4].includes(op)) throw Error('未知控制指令');
+    if(![1,2,3,4,6].includes(op)) throw Error('未知控制指令');
     if(op===4&&!Object.values(FORMATS).some(f=>f.id===formatId)) throw Error('未知图像格式编号');
     const b=new Uint8Array(op===4?14:op===1?13:5),v=new DataView(b.buffer);
     b[0]=op;v.setUint32(1,tx,true);

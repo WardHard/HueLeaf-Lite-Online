@@ -2,9 +2,11 @@
 const $=id=>document.getElementById(id),P=LeafProtocol;
 const pageQuery=globalThis.location?.search||'';
 const burstRequested=/(?:^|[?&])burst=1(?:&|$)/.test(pageQuery);
+const motionTestRequested=/(?:^|[?&])motion_test=1(?:&|$)/.test(pageQuery);
 let burstDisabled=false;
 const phoneSetup=/(?:^|[?&])setup=1(?:&|$)/.test(pageQuery);
 const qrCode=/(?:^|[?&])device=([^&]*)/.exec(pageQuery)?.[1]?.toUpperCase();
+const qrUnit=/(?:^#|&)unit=([^&]*)/.exec(globalThis.location?.hash||'')?.[1]?.toUpperCase();
 const preferNativeE6=/(?:^|[?&])format=e6n4(?:&|$)/.test(pageQuery);
 const nativeTrial=phoneSetup&&preferNativeE6;
 if(phoneSetup)
@@ -83,6 +85,9 @@ function render(){
   lock();
 }
 function lock(){
+  const motionTest=$('motionTest');
+  motionTest.hidden=!(motionTestRequested&&Array.isArray(cap?.actions)&&cap.actions.includes('e6-motion-test'));
+  motionTest.disabled=busy||connecting||!chars||samePendingDevice();
   $('send').disabled=busy||connecting||!chars;
   $('send').textContent=samePendingDevice()?'查询刷新结果':'传到彩叶 ↗';
   $('connect').disabled=busy||connecting||!!chars;
@@ -224,6 +229,8 @@ $('connect').onclick=async()=>{
   connecting=true;lock();
   try{
     if(qrCode!==undefined&&!/^[0-9A-F]{4}$/.test(qrCode))throw Error('设备二维码编号无效，请重新扫码。');
+    if(qrUnit!==undefined&&(!/^[0-9A-F]{12}$/.test(qrUnit)||qrUnit.slice(-4)!==qrCode))
+      throw Error('设备二维码标识无效，请重新扫码。');
     if(!isSecureContext)throw Error('请通过 HTTPS 或 localhost 打开本页');
     if(!navigator.bluetooth)throw Error('当前浏览器不支持蓝牙传图。Windows 请用 Edge 或 Chrome，安卓请用 Chrome。');
     const filter={services:[P.UUID.service]};
@@ -234,6 +241,8 @@ $('connect').onclick=async()=>{
     chars=link;cap=capability;
     if(qrCode!==undefined&&cap.device_code!==qrCode)
       throw Error(`所选设备与二维码编号 ${qrCode} 不符，请重新选择。`);
+    if(qrUnit!==undefined&&cap.unit_id!==qrUnit)
+      throw Error('所选设备的完整标识与二维码不符，请重新选择。');
     selected.addEventListener('gattserverdisconnected',detached,{once:true});
     const defaultFormat=supported(cap.default_format)?cap.default_format:supported('e6f6')?'e6f6':cap.format;
     $('format').value=preferNativeE6&&supported('e6n4')?'e6n4':defaultFormat;
@@ -247,6 +256,29 @@ $('connect').onclick=async()=>{
   }finally{connecting=false;lock();}
 };
 $('disconnect').onclick=()=>{canceled=true;device?.gatt.disconnect();};
+$('motionTest').onclick=async()=>{
+  if($('motionTest').hidden||$('motionTest').disabled)return;
+  const selected=device,link=chars,tx=crypto.getRandomValues(new Uint32Array(1))[0]||1;
+  busy=true;canceled=false;committed=true;lock();
+  $('progress').value=0;
+  try{
+    message('正在运行 40 帧高刷测试，随后恢复白屏。');
+    await write(link.control,P.command(6,tx),selected);
+    const deadline=Date.now()+90000;
+    while(!canceled&&device===selected&&Date.now()<deadline){
+      const result=P.status(await operation(()=>link.status.readValue(),selected));
+      if(result.tx!==tx)throw Error('设备事务已改变');
+      if(result.state===5)throw Error(`设备错误 ${result.error}`);
+      if(result.state===4){
+        if(result.error||result.received!==0)throw Error('设备回报与高刷测试不符');
+        $('progress').value=100;message('E6 高刷测试完成。');return;
+      }
+      await sleep(500);
+    }
+    throw Error('等待已结束，请查看屏幕');
+  }catch(e){message(`高刷测试未确认完成：${e.message}`);}
+  finally{committed=false;busy=false;lock();}
+};
 $('cancel').onclick=()=>{
   canceled=true;message(committed?'停止等待；屏幕刷新已经提交，无法撤销。':'正在取消，等待当前蓝牙操作结束…');
 };
